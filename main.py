@@ -121,7 +121,7 @@ def draw_detections(image, pucks, stickers):
     return output
 
 
-def process_image(image_path):
+def process_image(image_path, output_dir):
     image = cv2.imread(str(image_path))
     if image is None:
         print(f"  skipped (could not read)")
@@ -131,28 +131,31 @@ def process_image(image_path):
     pucks = detect_pucks(image, stickers)
     output = draw_detections(image, pucks, stickers)
 
-    image_output_dir = OUTPUT_DIR / image_path.stem
-    image_output_dir.mkdir(exist_ok=True)
-    cv2.imwrite(str(image_output_dir / "detected.jpg"), output)
-    print(
-        f"  {len(pucks)} pucks, {len(stickers)} stickers "
-        f"→ {image_output_dir.name}/detected.jpg"
+    output_path = output_dir / f"{image_path.stem}.jpg"
+    cv2.imwrite(str(output_path), output)
+    print(f"  {len(pucks)} pucks, {len(stickers)} stickers → {output_path.name}")
+
+
+def process_directory(input_dir, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image_paths = sorted(
+        p for p in input_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS
     )
+    if not image_paths:
+        print(f"No images found in {input_dir}")
+        return
+    for image_path in image_paths:
+        print(f"Processing {input_dir.name}/{image_path.name}")
+        process_image(image_path, output_dir)
 
 
 def main():
-    OUTPUT_DIR.mkdir(exist_ok=True)
-
-    image_paths = sorted(
-        p for p in IMAGES_DIR.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS
-    )
-    if not image_paths:
-        print(f"No images found in {IMAGES_DIR}")
+    subdirs = sorted(p for p in IMAGES_DIR.iterdir() if p.is_dir())
+    if not subdirs:
+        print(f"No subdirectories found in {IMAGES_DIR}")
         return
-
-    for image_path in image_paths:
-        print(f"Processing {image_path.name}")
-        process_image(image_path)
+    for subdir in subdirs:
+        process_directory(subdir, OUTPUT_DIR / subdir.name)
 
 
 if __name__ == "__main__":
