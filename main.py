@@ -7,6 +7,25 @@ IMAGES_DIR = Path(__file__).parent / "images"
 OUTPUT_DIR = Path(__file__).parent / "output"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
+# Panel mask: isolate the dark puck panel so detections elsewhere (side frame,
+# chassis cutouts, scaffolding behind the truck) can be rejected.
+PANEL_BRIGHTNESS_MAX = 75   # pixel is "panel" if grayscale value < this
+PANEL_SATURATION_MAX = 110  # AND HSV saturation < this (panel is desaturated)
+PANEL_CLOSE_KERNEL = 71     # large enough to bridge weld seams + fill puck-size bright holes
+PANEL_OPEN_KERNEL = 35      # break narrow corridors so dark corner shoulders don't sneak in
+PANEL_ERODE = 6             # small final erosion to keep mask off the frame transition
+PANEL_MIN_AREA = 50000      # ignore tiny dark blobs; the real panel is huge
+PANEL_DEBUG_OVERLAY = True  # draw the mask on output for visual tuning
+
+# Frame exclusion: bright/saturated regions touching the left/right border are the truck
+# side frame. Dilate generously and subtract from panel so dark "shoulders" at the
+# corners (where the frame curves out of the image) don't sneak through.
+FRAME_BRIGHTNESS_MIN = 110  # pixel is "frame-like" if brighter than this
+FRAME_SATURATION_MIN = 140  # OR more saturated than this (blue/red/green frame)
+FRAME_ERODE = 11            # strip out isolated bright spots (pucks) before merging frame
+FRAME_CLOSE_KERNEL = 41     # merge surviving frame fragments into one component
+FRAME_DILATE = 25           # how far the final frame exclusion reaches into the corners
+
 HOUGH_DP = 1.0
 HOUGH_MIN_DIST = 25
 HOUGH_PARAM1 = 100  # upper Canny threshold
@@ -34,6 +53,108 @@ STICKER_MIN_AREA = 120
 STICKER_MAX_AREA = 4000
 STICKER_MIN_RECT_FIT = 0.80    # contour_area / minAreaRect_area; rectangle ≈ 1.0, circle ≈ 0.785
 STICKER_MIN_ASPECT_RATIO = 1.3  # longer side / shorter side of fitted rect; rejects square-ish blobs
+
+
+def build_panel_mask(image):
+    """Binary mask of the dark puck panel, with bright puck holes filled in.
+
+    Anything outside this mask (side frame, scaffolding, chassis cutouts) is
+    not a valid place for a puck.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    saturation = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[:, :, 1]
+
+    panel = ((gray < PANEL_BRIGHTNESS_MAX) & (saturation < PANEL_SATURATION_MAX))
+    panel = panel.astype(np.uint8) * 255
+
+    # Close to fill in pucks/stickers/seams that sit inside the panel.
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (PANEL_CLOSE_KERNEL, PANEL_CLOSE_KERNEL)
+    )
+    panel = cv2.morphologyEx(panel, cv2.MORPH_CLOSE, kernel)
+
+    # Open to disconnect narrow corridors (e.g. corner shoulders connected via a
+    # thin path around the side frame). The shoulders become separate small
+    # components and get dropped by the next step.
+    if PANEL_OPEN_KERNEL > 0:
+        open_k = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (PANEL_OPEN_KERNEL, PANEL_OPEN_KERNEL)
+        )
+        panel = cv2.morphologyEx(panel, cv2.MORPH_OPEN, open_k)
+
+    # Keep only the largest connected component (the panel itself).
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(panel, connectivity=8)
+    if num_labels <= 1:
+        return np.zeros_like(panel)
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    if stats[largest, cv2.CC_STAT_AREA] < PANEL_MIN_AREA:
+        return np.zeros_like(panel)
+    mask = (labels == largest).astype(np.uint8) * 255
+
+    # Fill internal holes (bright weld seams, sealant blobs the close-kernel can't span).
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled = np.zeros_like(mask)
+    cv2.drawContours(filled, contours, -1, 255, thickness=cv2.FILLED)
+
+    # Subtract a dilated frame mask so dark "shoulders" at the corners (where the
+    # bright frame curves out of view) don't end up inside the panel.
+    frame = _build_frame_mask(gray, saturation)
+    filled = cv2.bitwise_and(filled, cv2.bitwise_not(frame))
+
+    # Light erosion to clear the frame transition zone.
+    if PANEL_ERODE > 0:
+        erode_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (PANEL_ERODE * 2 + 1, PANEL_ERODE * 2 + 1)
+        )
+        filled = cv2.erode(filled, erode_kernel)
+    return filled
+
+
+def _build_frame_mask(gray, saturation):
+    """Bright/saturated regions touching the left or right image border, dilated.
+
+    These are the truck side frame and any scaffolding visible through chassis
+    cutouts. Dilation extends the exclusion into the corner shoulders.
+    """
+    frame = ((gray > FRAME_BRIGHTNESS_MIN) | (saturation > FRAME_SATURATION_MIN))
+    frame = frame.astype(np.uint8) * 255
+
+    # Erode to wipe out isolated bright spots (pucks). The real frame is thicker
+    # than a puck, so it survives this step while pucks disappear entirely.
+    if FRAME_ERODE > 0:
+        erode_k = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (FRAME_ERODE * 2 + 1, FRAME_ERODE * 2 + 1)
+        )
+        frame = cv2.erode(frame, erode_k)
+
+    # Merge frame fragments so the whole side rail is one component.
+    close_k = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (FRAME_CLOSE_KERNEL, FRAME_CLOSE_KERNEL)
+    )
+    frame = cv2.morphologyEx(frame, cv2.MORPH_CLOSE, close_k)
+
+    # Keep only components that touch the left or right border. The central weld
+    # seam touches top/bottom but never the sides, so this excludes it.
+    num_labels, labels = cv2.connectedComponents(frame)
+    edge_labels = set(np.unique(labels[:, 0]).tolist())
+    edge_labels.update(np.unique(labels[:, -1]).tolist())
+    edge_labels.discard(0)
+    if not edge_labels:
+        return np.zeros_like(frame)
+    side_frame = np.isin(labels, list(edge_labels)).astype(np.uint8) * 255
+
+    # Dilate to reach into the corners and cover the transition zone.
+    dilate_k = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (FRAME_DILATE * 2 + 1, FRAME_DILATE * 2 + 1)
+    )
+    return cv2.dilate(side_frame, dilate_k)
+
+
+def _in_panel(panel_mask, cx, cy):
+    h, w = panel_mask.shape
+    if cx < 0 or cy < 0 or cx >= w or cy >= h:
+        return False
+    return panel_mask[cy, cx] != 0
 
 
 def detect_stickers(image):
@@ -75,7 +196,7 @@ def _point_in_bbox(px, py, bbox):
     return x <= px <= x + w and y <= py <= y + h
 
 
-def detect_pucks(image, stickers):
+def detect_pucks(image, stickers, panel_mask):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 1.5)
 
@@ -96,6 +217,10 @@ def detect_pucks(image, stickers):
     results = []
     for cx, cy, cr in circles[0]:
         cx, cy, cr = int(cx), int(cy), int(cr)
+
+        # Must sit on the dark puck panel — rejects detections on the side frame.
+        if not _in_panel(panel_mask, cx, cy):
+            continue
 
         # Inner disc must be bright (a real puck is white, not dust/glare),
         # and must contain at least one near-white pixel (dirt never reaches true white).
@@ -127,11 +252,11 @@ def detect_pucks(image, stickers):
         results.append((cx, cy, cr))
 
     # Ellipse-based pass for perspective-distorted pucks Hough won't catch.
-    results.extend(_detect_pucks_ellipse(gray, results, stickers))
+    results.extend(_detect_pucks_ellipse(gray, results, stickers, panel_mask))
     return results
 
 
-def _detect_pucks_ellipse(gray, existing_pucks, stickers):
+def _detect_pucks_ellipse(gray, existing_pucks, stickers, panel_mask):
     _, binary = cv2.threshold(gray, ELLIPSE_THRESHOLD, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -153,6 +278,10 @@ def _detect_pucks_ellipse(gray, existing_pucks, stickers):
             continue
 
         cx, cy, cr = int(ex), int(ey), int(major)
+
+        # Must sit on the dark puck panel.
+        if not _in_panel(panel_mask, cx, cy):
+            continue
 
         # Skip if Hough already found this puck (within minDist).
         if any((cx - hx) ** 2 + (cy - hy) ** 2 < HOUGH_MIN_DIST ** 2
@@ -176,8 +305,16 @@ def _detect_pucks_ellipse(gray, existing_pucks, stickers):
     return extras
 
 
-def draw_detections(image, pucks, stickers):
+def draw_detections(image, pucks, stickers, panel_mask):
     output = image.copy()
+
+    if PANEL_DEBUG_OVERLAY and panel_mask is not None:
+        # Tint the panel area green so the mask is visible during tuning.
+        tint = np.zeros_like(output)
+        tint[:] = (0, 255, 0)
+        masked_tint = cv2.bitwise_and(tint, tint, mask=panel_mask)
+        output = cv2.addWeighted(output, 1.0, masked_tint, 0.25, 0)
+
     for x, y, w, h in stickers:
         cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 255), 2)
         cv2.putText(output, "sticker", (x, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
@@ -194,12 +331,14 @@ def process_image(image_path, output_dir):
         print(f"  skipped (could not read)")
         return
 
+    panel_mask = build_panel_mask(image)
     stickers = detect_stickers(image)
-    pucks = detect_pucks(image, stickers)
-    output = draw_detections(image, pucks, stickers)
+    pucks = detect_pucks(image, stickers, panel_mask)
+    output = draw_detections(image, pucks, stickers, panel_mask)
 
     output_path = output_dir / f"{image_path.stem}.jpg"
     cv2.imwrite(str(output_path), output)
+    cv2.imwrite(str(output_dir / f"{image_path.stem}_mask.png"), panel_mask)
     print(f"  {len(pucks)} pucks, {len(stickers)} stickers → {output_path.name}")
 
 
