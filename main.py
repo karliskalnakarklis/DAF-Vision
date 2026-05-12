@@ -55,14 +55,32 @@ STICKER_MIN_RECT_FIT = 0.80    # contour_area / minAreaRect_area; rectangle ≈ 
 STICKER_MIN_ASPECT_RATIO = 1.3  # longer side / shorter side of fitted rect; rejects square-ish blobs
 
 
+def _gray_world_balance(image):
+    """Neutralize a per-image color cast so saturation-based thresholds behave.
+
+    A warm/cool tint pushes HSV saturation high even on the dark panel, which
+    causes the panel test (sat < PANEL_SATURATION_MAX) to reject huge regions
+    and the frame test (sat > FRAME_SATURATION_MIN) to swallow them. Pulling
+    the channel means together removes the cast. Already-neutral images get
+    multipliers near 1.0 and are effectively untouched.
+    """
+    b, g, r = cv2.split(image.astype(np.float32))
+    mean = (b.mean() + g.mean() + r.mean()) / 3.0
+    b *= mean / max(b.mean(), 1e-6)
+    g *= mean / max(g.mean(), 1e-6)
+    r *= mean / max(r.mean(), 1e-6)
+    return np.clip(cv2.merge([b, g, r]), 0, 255).astype(np.uint8)
+
+
 def build_panel_mask(image):
     """Binary mask of the dark puck panel, with bright puck holes filled in.
 
     Anything outside this mask (side frame, scaffolding, chassis cutouts) is
     not a valid place for a puck.
     """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    saturation = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[:, :, 1]
+    balanced = _gray_world_balance(image)
+    gray = cv2.cvtColor(balanced, cv2.COLOR_BGR2GRAY)
+    saturation = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)[:, :, 1]
 
     panel = ((gray < PANEL_BRIGHTNESS_MAX) & (saturation < PANEL_SATURATION_MAX))
     panel = panel.astype(np.uint8) * 255
