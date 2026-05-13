@@ -33,6 +33,7 @@ No machine-learning models are used — only classical OpenCV operations.
 
 import cv2
 import numpy as np
+import tomllib
 from pathlib import Path
 
 
@@ -43,6 +44,23 @@ from pathlib import Path
 IMAGES_DIR = Path(__file__).parent / "images"
 OUTPUT_DIR = Path(__file__).parent / "output"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
+TUNING_PATH = Path(__file__).parent / "tuning.toml"
+
+
+# ---------------------------------------------------------------------------
+# Tuning overrides
+# ---------------------------------------------------------------------------
+# Engineers can edit tuning.toml to recalibrate detection thresholds after a
+# camera swap without touching this file. Any value missing from the TOML
+# falls back to the default written next to the constant below.
+
+def _load_tuning():
+    if not TUNING_PATH.exists():
+        return {}
+    with open(TUNING_PATH, "rb") as f:
+        return tomllib.load(f)
+
+_TUNING = _load_tuning()
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +68,8 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 # ---------------------------------------------------------------------------
 # A pixel is "panel" if it is both dark (low grayscale value) and desaturated
 # (low HSV saturation — i.e. close to gray, not colorful).
-PANEL_BRIGHTNESS_MAX = 75   # pixel is "panel" if grayscale value < this
-PANEL_SATURATION_MAX = 110  # AND HSV saturation < this (panel is desaturated)
+PANEL_BRIGHTNESS_MAX = _TUNING.get("panel_max_brightness", 75)    # pixel is "panel" if grayscale value < this
+PANEL_SATURATION_MAX = _TUNING.get("panel_max_saturation", 110)   # AND HSV saturation < this (panel is desaturated)
 PANEL_CLOSE_KERNEL = 71     # morphological close: fills holes (pucks, seams) up to this size
 PANEL_OPEN_KERNEL = 35      # morphological open: breaks narrow corridors connecting panel to corners
 PANEL_ERODE = 6             # final shrink to stay clear of the frame transition
@@ -64,14 +82,14 @@ FRAME_BRIGHTNESS_MIN = 110  # pixel is "frame-like" if brighter than this
 FRAME_SATURATION_MIN = 140  # OR more saturated than this (blue/red/green frame paint)
 FRAME_ERODE = 11            # erase isolated bright spots (pucks) before merging the frame
 FRAME_CLOSE_KERNEL = 41     # merge surviving frame fragments into one component
-FRAME_DILATE = 25           # how far the final frame exclusion reaches into the corners
+FRAME_DILATE = _TUNING.get("frame_exclusion_size", 25)  # how far the final frame exclusion reaches into the corners
 
 
 # ---------------------------------------------------------------------------
 # STAGE 2 constants — Sticker detection
 # ---------------------------------------------------------------------------
 # Stickers are bright, rectangular, and clearly longer than they are wide.
-STICKER_THRESHOLD = 160         # binary threshold: only pixels brighter than this survive
+STICKER_THRESHOLD = _TUNING.get("sticker_brightness_threshold", 160)  # binary threshold: only pixels brighter than this survive
 STICKER_CLOSE_KERNEL = 9        # bridge barcode stripes so a sticker stays one blob
 STICKER_MIN_AREA = 120
 STICKER_MAX_AREA = 4000
@@ -89,18 +107,18 @@ HOUGH_PARAM1 = 100  # upper Canny edge threshold used internally by HoughCircles
 HOUGH_PARAM2 = 10   # accumulator threshold; lower = more sensitive (more circles)
 HOUGH_MIN_RADIUS = 6
 HOUGH_MAX_RADIUS = 16
-HOUGH_MAX_SURROUNDING_BRIGHTNESS = 70  # mean of ring around the circle; reject if bright (off-panel)
-HOUGH_MIN_CENTER_BRIGHTNESS = 110      # mean inside the circle; reject if dim (dust/glare, not a puck)
-HOUGH_MIN_CENTER_PEAK = 160            # brightest pixel inside; dirt never reaches near-white
-HOUGH_MIN_CONTRAST = 60                # center mean - ring mean; saves pucks on over-exposed panels
+HOUGH_MAX_SURROUNDING_BRIGHTNESS = _TUNING.get("puck_max_surrounding_brightness", 70)  # mean of ring around the circle; reject if bright (off-panel)
+HOUGH_MIN_CENTER_BRIGHTNESS      = _TUNING.get("puck_center_mean_brightness", 110)     # mean inside the circle; reject if dim (dust/glare, not a puck)
+HOUGH_MIN_CENTER_PEAK            = _TUNING.get("puck_center_peak_brightness", 160)     # brightest pixel inside; dirt never reaches near-white
+HOUGH_MIN_CONTRAST               = _TUNING.get("puck_min_contrast", 60)                # center mean - ring mean; saves pucks on over-exposed panels
 
 # Pass B: Ellipse fitting fallback (catches perspective-distorted pucks).
-ELLIPSE_THRESHOLD = 130        # bright pixels only; pucks are near-white
+ELLIPSE_THRESHOLD = _TUNING.get("ellipse_brightness_threshold", 100)  # bright pixels only; pucks are near-white
 ELLIPSE_MIN_AREA = 20
-ELLIPSE_MAX_AREA = 1500
+ELLIPSE_MAX_AREA = 2000
 ELLIPSE_MIN_AXIS = 4           # min minor-axis radius of fitted ellipse; rejects tiny dust blobs
-ELLIPSE_MAX_AXIS = 25          # max major-axis radius of fitted ellipse; rejects large bright objects
-ELLIPSE_MAX_ASPECT = 3.0       # reject elongated blobs (stickers, edge artifacts)
+ELLIPSE_MAX_AXIS = 35          # max major-axis radius of fitted ellipse; rejects large bright objects
+ELLIPSE_MAX_ASPECT = _TUNING.get("ellipse_max_aspect", 4.0)  # reject elongated blobs (stickers, edge artifacts)
 ELLIPSE_MIN_FILL = 0.50        # contour_area / fitted_ellipse_area; rejects irregular blobs
 
 

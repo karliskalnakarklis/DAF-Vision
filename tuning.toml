@@ -1,0 +1,103 @@
+# ============================================================
+#  DAF Vision  —  Camera tuning
+# ============================================================
+#
+# This file controls the detection thresholds that most often
+# need to be re-adjusted when the camera, lighting, or panel
+# colour changes. You do NOT need to edit the Python code —
+# change a number here, save the file, and re-run the script.
+#
+# How to read each setting:
+#   * Every value is a single number.
+#   * Brightness values run from 0 (pure black) to 255 (pure white).
+#   * "RAISE" / "LOWER" tells you which direction to nudge.
+#   * Change one value at a time, re-run, and check the
+#     output images and the *_mask.png files before changing
+#     the next one.
+#
+# If you delete or rename this file the script still runs —
+# it falls back to the built-in defaults (shown next to each
+# value below).
+#
+# ============================================================
+
+
+# ------------------------------------------------------------
+#  PUCK BRIGHTNESS  (start here when setting up a new camera)
+# ------------------------------------------------------------
+# These four values decide whether a bright round spot is
+# bright enough to count as a puck. A new camera almost
+# always needs these adjusted first.
+
+# Brightest single pixel that must exist inside a real puck.
+# LOWER this if dim or dusty pucks are being missed.
+# RAISE this if dirt/scratches are being marked as pucks.
+puck_center_peak_brightness = 160        # default: 160
+
+# Average brightness inside a real puck.
+# LOWER if pucks look dimmer than expected (cloudy lighting).
+# RAISE if dirt is being marked as a puck.
+puck_center_mean_brightness = 110        # default: 110
+
+# Minimum allowed brightness gap between a puck and its
+# surrounding panel. This setting rescues pucks when the
+# panel is over-exposed (washed out).
+# LOWER if pucks are missed on a bright/shiny panel.
+puck_min_contrast = 60                   # default: 60
+
+# Brightness allowed for the small ring of panel right
+# around a puck. Pucks normally sit on dark panel.
+# RAISE this if the panel reflects more light than expected.
+puck_max_surrounding_brightness = 70     # default: 70
+
+
+# ------------------------------------------------------------
+#  PUCK SHAPE  (for pucks seen at an angle / oval pucks)
+# ------------------------------------------------------------
+
+# Brightness threshold used to find puck-shaped blobs in
+# the fallback (oval) detector.
+# LOWER to catch dimmer pucks. RAISE if false positives appear.
+ellipse_brightness_threshold = 100       # default: 100
+
+# How "oval" a puck is allowed to look (long side ÷ short side).
+# RAISE (e.g. 5.0 or 6.0) if pucks viewed at an angle are missed.
+# LOWER if elongated scratches / stickers are mis-detected.
+ellipse_max_aspect = 4.0                 # default: 4.0
+
+
+# ------------------------------------------------------------
+#  PANEL DETECTION  (the dark underbody area where pucks live)
+# ------------------------------------------------------------
+
+# Maximum brightness for a pixel to count as panel.
+# RAISE if the script thinks the panel is too small
+# (good areas getting excluded).
+# LOWER if dark areas outside the panel are being included.
+panel_max_brightness = 75                # default: 75
+
+# Maximum colourfulness for a pixel to count as panel.
+# The panel should be grey/black, not colourful.
+# RAISE if a coloured lighting tint is shrinking the panel.
+panel_max_saturation = 110               # default: 110
+
+
+# ------------------------------------------------------------
+#  FRAME EXCLUSION  (the bright side rails of the truck)
+# ------------------------------------------------------------
+
+# How far inward (in pixels) the side-frame exclusion reaches.
+# RAISE if bits of the side frame are being mis-detected
+# as pucks near the left/right edges.
+# LOWER if real pucks near the left/right edges are missed.
+frame_exclusion_size = 25                # default: 25
+
+
+# ------------------------------------------------------------
+#  STICKER DETECTION  (white barcode/QR labels on the panel)
+# ------------------------------------------------------------
+
+# Brightness threshold for finding white sticker labels.
+# RAISE if bright scratches are being mis-detected as stickers.
+# LOWER if dirty/yellowed stickers are being missed.
+sticker_brightness_threshold = 160       # default: 160
