@@ -56,7 +56,6 @@ PANEL_CLOSE_KERNEL = 71     # morphological close: fills holes (pucks, seams) up
 PANEL_OPEN_KERNEL = 35      # morphological open: breaks narrow corridors connecting panel to corners
 PANEL_ERODE = 6             # final shrink to stay clear of the frame transition
 PANEL_MIN_AREA = 50000      # ignore tiny dark blobs; the real panel is huge
-PANEL_DEBUG_OVERLAY = True  # tint the mask onto the output image for visual tuning
 
 # Frame exclusion: the truck side frame is a bright/saturated strip that
 # touches the left or right image edge. We build a mask of it and subtract
@@ -421,13 +420,6 @@ def _detect_pucks_ellipse(gray, existing_pucks, stickers, panel_mask):
 
 def draw_detections(image, pucks, stickers, panel_mask):
     output = image.copy()
-
-    # Tint the panel area green so the mask is visible during tuning.
-    if PANEL_DEBUG_OVERLAY and panel_mask is not None:
-        tint = np.zeros_like(output)
-        tint[:] = (0, 255, 0)
-        masked_tint = cv2.bitwise_and(tint, tint, mask=panel_mask)
-        output = cv2.addWeighted(output, 1.0, masked_tint, 0.25, 0)
 
     # Yellow boxes for stickers.
     for x, y, w, h in stickers:
